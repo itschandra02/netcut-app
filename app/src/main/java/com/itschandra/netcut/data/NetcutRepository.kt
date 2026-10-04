@@ -24,7 +24,7 @@ class NetcutRepository(private val context: Context) {
     private val accPrev = HashMap<String, LongArray>()   // ip -> [rx, tx, timestampMs]
     private val vendorCache = ConcurrentHashMap<String, String>()
     private val logs = ArrayDeque<String>()
-    private var lastMitmTargets: Set<String> = emptySet()
+    private var lastMitmTargets: String = ""
     private var limits = HashMap<String, Int>()
 
     var net = NetInfo()
@@ -247,7 +247,7 @@ class NetcutRepository(private val context: Context) {
             log("MITM ON")
         } else {
             ArpKit.stopMitm(context)
-            lastMitmTargets = emptySet()
+            lastMitmTargets = ""
             log("MITM OFF")
         }
     }
@@ -257,7 +257,7 @@ class NetcutRepository(private val context: Context) {
         val targets = devices.entries
             .filter { it.key != net.ip && it.key != net.gateway && it.value.mac.isNotEmpty() }
             .map { it.key to it.value.mac }
-        val sig = targets.joinToString("|") { "${it.first}:${it.second}" }.toSet()
+        val sig = targets.joinToString("|") { "${it.first}:${it.second}" }
         if (!force && sig == lastMitmTargets) return
         lastMitmTargets = sig
         ArpKit.startMitm(context, net, targets)
@@ -312,7 +312,7 @@ class NetcutRepository(private val context: Context) {
     private suspend fun onNetworkChange(fresh: NetInfo) {
         log("NETWORK CHANGED -> ip ${fresh.ip} gw ${fresh.gateway}")
         ArpKit.stopMitm(context)
-        lastMitmTargets = emptySet()
+        lastMitmTargets = ""
         RootShell.run("iptables -F NETCUT_ACC 2>/dev/null")
         devices.keys.toList().forEach { ip ->
             RootShell.run("iptables -D FORWARD -s $ip -j DROP 2>/dev/null; " +
