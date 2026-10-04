@@ -58,10 +58,13 @@ object ArpKit {
         kotlinx.coroutines.delay(300)
         // start daemon detached (gak di-wait)
         val cmd = "$bin mitm ${net.iface} ${net.ip} ${net.mac} ${net.gateway} ${net.gatewayMac} '$list'"
-        val pid = RootShell.startDetached(cmd)
-        if (pid > 0) {
-            // save pid
-            RootShell.run("echo $pid > $pidFile", 2_000)
+        val ok = RootShell.startDetached(cmd)
+        if (ok) {
+            kotlinx.coroutines.delay(500)
+            // save pid dari pidof
+            val pidR = RootShell.run("pidof arpkit", 2_000)
+            val pid = pidR.out.trim().split("\\s+".toRegex()).firstOrNull() ?: ""
+            if (pid.isNotEmpty()) RootShell.run("echo $pid > $pidFile", 2_000)
             return true
         }
         return false

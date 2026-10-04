@@ -49,18 +49,17 @@ object RootShell {
 
     fun hasRoot(): Boolean = runBlocking("id", 5_000).out.contains("uid=0")
 
-    /** Start proses background yang gak di-wait (daemon). Return PID atau -1. */
-    fun startDetached(cmd: String): Int {
+    /** Start proses background yang gak di-wait (daemon). Return true kalau berhasil. */
+    fun startDetached(cmd: String): Boolean {
         return try {
             val pb = ProcessBuilder("su", "-c", "$cmd >/dev/null 2>&1")
             pb.redirectErrorStream(false)
             pb.redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
             pb.redirectError(ProcessBuilder.Redirect.to(File("/dev/null")))
-            val proc = pb.start()
-            // jangan wait — biarkan jalan sebagai daemon
-            proc.pid().toInt()
+            pb.start()
+            true
         } catch (e: Exception) {
-            -1
+            false
         }
     }
 }
