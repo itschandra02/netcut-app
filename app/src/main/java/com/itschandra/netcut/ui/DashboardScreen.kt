@@ -2,9 +2,12 @@ package com.itschandra.netcut.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -18,7 +21,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,365 +38,586 @@ import com.itschandra.netcut.ui.theme.*
 import com.itschandra.netcut.vm.DashboardViewModel
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val Mono = FontFamily.Monospace
+
 @Composable
 fun DashboardScreen(vm: DashboardViewModel, dark: Boolean, onToggleTheme: () -> Unit) {
     val state by vm.state.collectAsState()
+    val pal = if (dark) DarkPalette else LightPalette
+    var filter by remember { mutableStateOf("") }
 
-    Scaffold(
-        topBar = {
-            TopBar(
-                state = state,
-                dark = dark,
-                onToggleTheme = onToggleTheme,
-                onScan = { vm.scan() },
-                onMitm = { vm.setMitm(it) },
-            )
-        },
-        containerColor = MaterialTheme.colorScheme.background,
-    ) { pad ->
-        LazyColumn(
-            modifier = Modifier
-                .padding(pad)
-                .fillMaxSize()
-                .padding(horizontal = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
-        ) {
-            item { ThroughputCard(state, dark) }
-            item { StatsGrid(state, dark) }
-            item {
-                Text(
-                    "DEVICES",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 1.2.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 4.dp, top = 6.dp),
-                )
-            }
-            if (!state.rootOk && !state.loading) {
-                item { WarningCard("Root belum diberikan.\nSemua fitur butuh akses root (su).\nBuka Magisk/KernelSU lalu izinkan, setelah itu tap SCAN.") }
-            } else if (state.devices.isEmpty()) {
-                item { WarningCard(if (state.loading) "Menyiapkan…" else "Belum ada device — tap SCAN LAN.") }
-            } else {
-                items(state.devices, key = { it.ip }) { d ->
-                    DeviceRow(
-                        d = d,
-                        onBlock = { vm.setBlock(d.ip, it) },
-                        onLimit = { vm.setLimit(d.ip, it) },
-                    )
-                }
-            }
-            item { LogCard(state.logs) }
-        }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(pal.bg),
+        contentPadding = PaddingValues(bottom = 28.dp),
+    ) {
+        // ===== TOPBAR =====
+        item { TopBar(state, pal, dark, onToggleTheme, onScan = { vm.scan() }, onMitm = { vm.setMitm(it) }) }
+        // ===== HERO / THROUGHPUT =====
+        item { HeroSection(state, pal) }
+        // ===== STATS 2x2 =====
+        item { StatsSection(state, pal) }
+        // ===== DEVICES PANEL =====
+        item { DevicesPanel(state, pal, filter, { filter = it }, vm) }
+        // ===== EVENT LOG =====
+        item { LogPanel(state, pal) }
+        // ===== FOOTER =====
+        item { Footer(pal) }
     }
 }
 
+// ════════════════════════════════════════════════════════════ TOPBAR
 @Composable
 private fun TopBar(
-    state: DashboardUiState,
-    dark: Boolean,
-    onToggleTheme: () -> Unit,
-    onScan: () -> Unit,
-    onMitm: (Boolean) -> Unit,
+    state: DashboardUiState, pal: NetCutColors, dark: Boolean,
+    onToggleTheme: () -> Unit, onScan: () -> Unit, onMitm: (Boolean) -> Unit,
 ) {
-    Surface(color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("NET", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                Text("CUT", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = onToggleTheme, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-                    Text(if (dark) "LIGHT" else "DARK", fontSize = 11.sp)
-                }
+    Column(
+        Modifier.fillMaxWidth()
+            .background(pal.bg)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        // Row 1: brand + theme
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row {
+                Text("NET", fontWeight = FontWeight.Bold, fontSize = 19.sp, color = pal.text)
+                Text("CUT", fontWeight = FontWeight.Bold, fontSize = 19.sp, color = pal.brand)
+                // blinking cursor
+                BlinkCursor(pal.brand)
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.weight(1f))
+            ThemeButton(dark, pal, onToggleTheme)
+        }
+        Spacer(Modifier.height(10.dp))
+        // Row 2: MITM seg + SCAN
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            // segmented control
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
+                Modifier
+                    .clip(RoundedCornerShape(11.dp))
+                    .border(1.dp, pal.border, RoundedCornerShape(11.dp))
+                    .background(pal.card),
             ) {
-                AssistChip(
-                    onClick = {},
-                    label = { Text(state.net.iface.ifEmpty { "—" }, fontSize = 11.sp) },
-                )
-                AssistChip(
-                    onClick = {},
-                    label = { Text(state.net.ip.ifEmpty { "—" }, fontSize = 11.sp) },
-                )
-                AssistChip(
-                    onClick = {},
-                    label = { Text("gw ${state.net.gateway.ifEmpty { "…" }}", fontSize = 11.sp) },
+                SegButton("MITM ON", state.mitmOn, pal) { onMitm(true) }
+                SegButton("OFF", !state.mitmOn, pal) { onMitm(false) }
+            }
+            Spacer(Modifier.weight(1f))
+            // primary scan button
+            Button(
+                onClick = onScan,
+                enabled = !state.scanning,
+                shape = RoundedCornerShape(11.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = pal.brand,
+                    contentColor = Color.White,
+                ),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+            ) {
+                Text(
+                    if (state.scanning) "SCANNING…" else "SCAN LAN",
+                    fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = state.mitmOn, onCheckedChange = onMitm)
-                    Spacer(Modifier.width(6.dp))
-                    Text("MITM", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-                }
-                Spacer(Modifier.weight(1f))
-                Button(
-                    onClick = onScan,
-                    enabled = !state.scanning,
-                    shape = RoundedCornerShape(11.dp),
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (state.scanning) "SCANNING…" else "SCAN LAN", fontSize = 12.sp)
-                }
-            }
+        }
+        Spacer(Modifier.height(10.dp))
+        // Row 3: chips (scrollable)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Chip(state.net.iface.ifEmpty { "—" }, pal, bold = true)
+            Chip(state.net.ip.ifEmpty { "—" }, pal)
+            Chip("gw ${state.net.gateway.ifEmpty { "…" }}", pal, dim = true)
+            Chip(state.net.mac.ifEmpty { "—" }, pal, dim = true)
         }
     }
 }
 
 @Composable
-private fun ThroughputCard(state: DashboardUiState, dark: Boolean) {
+private fun BlinkCursor(color: Color) {
+    var visible by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(550); visible = !visible }
+    }
+    Box(
+        Modifier.padding(start = 3.dp).size(width = 3.dp, height = 18.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(if (visible) color else Color.Transparent)
+    )
+}
+
+@Composable
+private fun ThemeButton(dark: Boolean, pal: NetCutColors, onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .border(1.dp, pal.border, RoundedCornerShape(11.dp))
+            .background(pal.card),
+    ) {
+        Text(if (dark) "☀" else "🌙", fontSize = 15.sp, color = pal.muted)
+    }
+}
+
+@Composable
+private fun SegButton(text: String, active: Boolean, pal: NetCutColors, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) pal.brand else Color.Transparent,
+            contentColor = if (active) Color.White else pal.muted,
+        ),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+        elevation = null,
+    ) {
+        Text(text, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp)
+    }
+}
+
+@Composable
+private fun Chip(text: String, pal: NetCutColors, bold: Boolean = false, dim: Boolean = false) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(99.dp))
+            .border(1.dp, pal.border, RoundedCornerShape(99.dp))
+            .background(pal.card)
+            .padding(horizontal = 11.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text,
+            fontFamily = Mono, fontSize = 11.sp,
+            color = if (bold) pal.brand else if (dim) pal.faint else pal.muted,
+            fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
+// ════════════════════════════════════════════════════════════ HERO
+@Composable
+private fun HeroSection(state: DashboardUiState, pal: NetCutColors) {
     val histDown = remember { mutableStateListOf<Double>() }
     val histUp = remember { mutableStateListOf<Double>() }
     LaunchedEffect(state.downRate, state.upRate) {
         histDown.add(state.downRate); histUp.add(state.upRate)
-        while (histDown.size > 60) { histDown.removeAt(0); histUp.removeAt(0) }
+        while (histDown.size > 90) { histDown.removeAt(0); histUp.removeAt(0) }
     }
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+
+    Column(
+        Modifier.padding(horizontal = 14.dp).fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.dp, pal.border, RoundedCornerShape(16.dp))
+            .background(pal.card),
     ) {
-        Column(Modifier.fillMaxWidth().padding(18.dp)) {
+        // head
+        Row(
+            Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                "THROUGHPUT · ${state.net.iface.ifEmpty { "—" }}",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.2.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                "Throughput · ${state.net.iface.ifEmpty { "—" }}",
+                fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.3.sp, color = pal.muted,
             )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                RateText("DOWN", state.downRate, Green)
-                RateText("UP", state.upRate, Brand)
+            Spacer(Modifier.weight(1f))
+            // legend
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                LegendDot("download", pal.acc)
+                LegendDot("upload", pal.cy)
             }
-            Spacer(Modifier.height(12.dp))
-            RateChart(
-                down = histDown.toList(),
-                up = histUp.toList(),
-                modifier = Modifier.fillMaxWidth().height(96.dp),
-            )
         }
+        // big numbers
+        Row(
+            Modifier.padding(start = 22.dp, end = 22.dp, top = 8.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(44.dp),
+        ) {
+            BigNumber(state.downRate, pal.acc)
+            BigNumber(state.upRate, pal.cy)
+        }
+        // chart
+        ChartCanvas(
+            down = histDown.toList(), up = histUp.toList(),
+            cDown = pal.acc, cUp = pal.cy, grid = pal.grid,
+            modifier = Modifier.fillMaxWidth().height(152.dp),
+        )
     }
 }
 
 @Composable
-private fun RateText(label: String, rate: Double, color: Color) {
-    Column {
-        Text(label, fontSize = 9.sp, letterSpacing = 1.2.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                fmtRate(rate).first,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-                color = color,
-                letterSpacing = (-0.5).sp,
-            )
-            Text(" ${fmtRate(rate).second}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+private fun LegendDot(label: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(9.dp).clip(RoundedCornerShape(3.dp)).background(color))
+        Text(label, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.5.sp, color = color)
     }
 }
 
 @Composable
-private fun RateChart(down: List<Double>, up: List<Double>, modifier: Modifier) {
-    val cDown = Green
-    val cUp = Brand
+private fun BigNumber(rate: Double, color: Color) {
+    val (v, u) = fmtRate(rate)
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(v, fontFamily = Mono, fontWeight = FontWeight.Bold, fontSize = 32.sp, color = color, letterSpacing = (-0.8).sp)
+        Text(u, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF7B8494), modifier = Modifier.padding(start = 5.dp, bottom = 4.dp))
+    }
+}
+
+// ════════════════════════════════════════════════════════════ CHART
+@Composable
+private fun ChartCanvas(
+    down: List<Double>, up: List<Double>,
+    cDown: Color, cUp: Color, grid: Color,
+    modifier: Modifier,
+) {
     Canvas(modifier) {
-        val max = (down + up).maxOrNull()?.coerceAtLeast(1024.0) ?: 1024.0
-        val n = maxOf(down.size, 2)
+        val max = (down + up).maxOrNull()?.coerceAtLeast(1024.0)?.times(1.15) ?: 1200.0
+        val n = 90
         val dx = size.width / (n - 1)
-        fun y(v: Double) = size.height - (v / max * (size.height * 0.85f)).toFloat() - 4f
-        drawSeries(up, dx, ::y, cUp)
-        drawSeries(down, dx, ::y, cDown)
+        fun py(v: Double) = size.height - 8f - (v / max * (size.height - 18f)).toFloat()
+
+        // grid
+        for (i in 1 until 4) {
+            val y = (size.height * i / 4f)
+            drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f)
+        }
+
+        // upload series (behind)
+        drawSeries(up, n, dx, ::py, cUp, alphaFill = 0.11f)
+        // download series (front)
+        drawSeries(down, n, dx, ::py, cDown, alphaFill = 0.15f)
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSeries(
-    data: List<Double>,
-    dx: Float,
-    y: (Double) -> Float,
-    color: Color,
+private fun DrawScope.drawSeries(
+    data: List<Double>, n: Int, dx: Float,
+    py: (Double) -> Float,
+    color: Color, alphaFill: Float,
 ) {
     if (data.size < 2) return
-    val path = androidx.compose.ui.graphics.Path()
+    val path = Path()
+    val fill = Path()
+    fill.moveTo(0f, size.height)
     data.forEachIndexed { i, v ->
         val x = i * dx
-        val yy = y(v)
-        if (i == 0) path.moveTo(x, yy) else path.lineTo(x, yy)
+        val y = py(v)
+        if (i == 0) { path.moveTo(x, y); fill.lineTo(x, y) }
+        else { path.lineTo(x, y); fill.lineTo(x, y) }
     }
-    drawPath(path, color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+    fill.lineTo((data.size - 1) * dx, size.height)
+    fill.close()
+    drawPath(fill, color.copy(alpha = alphaFill))
+    drawPath(path, color, style = Stroke(width = 1.6f))
+    // live dot
+    val lx = (data.size - 1) * dx
+    val ly = py(data.last())
+    drawCircle(color, 2.6f, Offset(lx, ly))
 }
 
+// ════════════════════════════════════════════════════════════ STATS 2x2
 @Composable
-private fun StatsGrid(state: DashboardUiState, dark: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatCard(Modifier.weight(1f), "Devices Online", state.devices.count { it.online }.toString(),
-                "${state.devices.size} found", Person_soft(dark), Person_fg(dark), Icons.Default.Person)
-            StatCard(Modifier.weight(1f), "Total Down", fmtBytes(state.totalDown),
-                "since boot", GreenSoft2(dark), Green, Icons.Default.KeyboardArrowDown)
+private fun StatsSection(state: DashboardUiState, pal: NetCutColors) {
+    Column(Modifier.padding(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            StatCard(Modifier.weight(1f), pal, "Devices Online",
+                state.devices.count { it.online }.toString(),
+                "${state.devices.size} discovered",
+                pal.brandSoft, pal.brand, Icons.Default.Person)
+            StatCard(Modifier.weight(1f), pal, "Total Down",
+                fmtBytes(state.totalDown), "since boot",
+                pal.greenSoft, pal.green, Icons.Default.KeyboardArrowDown)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatCard(Modifier.weight(1f), "Total Up", fmtBytes(state.totalUp),
-                "since boot", AmberSoft2(dark), Amber, Icons.Default.KeyboardArrowUp)
-            StatCard(Modifier.weight(1f), "Blocked", state.blockedCount.toString(),
-                "${state.limitedCount} limited", RedSoft2(dark), Red, Icons.Default.Warning)
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            StatCard(Modifier.weight(1f), pal, "Total Up",
+                fmtBytes(state.totalUp), "since boot",
+                pal.amberSoft, pal.amber, Icons.Default.KeyboardArrowUp)
+            StatCard(Modifier.weight(1f), pal, "Blocked",
+                state.blockedCount.toString(),
+                "${state.limitedCount} throttled",
+                pal.redSoft, pal.red, Icons.Default.Warning)
         }
     }
 }
 
 @Composable
 private fun StatCard(
-    modifier: Modifier,
-    label: String,
-    value: String,
-    sub: String,
-    iconBg: Color,
-    accent: Color,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier, pal: NetCutColors,
+    label: String, value: String, sub: String,
+    iconBg: Color, accent: Color, icon: ImageVector,
 ) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    Row(
+        modifier
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.dp, pal.border, RoundedCornerShape(16.dp))
+            .background(pal.card)
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(iconBg),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
-            }
-            Spacer(Modifier.width(11.dp))
-            Column {
-                Text(value, fontSize = 19.sp, fontWeight = FontWeight.Bold, color = accent)
-                Text(label, fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(sub, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(
+            Modifier.size(50.dp).clip(RoundedCornerShape(14.dp)).background(iconBg),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, null, tint = accent, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(15.dp))
+        Column {
+            Text(value, fontFamily = Mono, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = accent, letterSpacing = (-0.4).sp)
+            Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp, color = pal.muted)
+            Text(sub, fontSize = 11.sp, color = pal.muted)
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════ DEVICES PANEL
+@Composable
+private fun DevicesPanel(
+    state: DashboardUiState, pal: NetCutColors,
+    filter: String, onFilter: (String) -> Unit,
+    vm: DashboardViewModel,
+) {
+    val filtered = state.devices.filter { d ->
+        filter.isEmpty() || (d.ip + " " + d.mac + " " + d.vendor).lowercase().contains(filter.lowercase())
+    }
+
+    Column(
+        Modifier.padding(horizontal = 14.dp).fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.dp, pal.border, RoundedCornerShape(16.dp))
+            .background(pal.card),
+    ) {
+        // panel-head
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Devices", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.2.sp, color = pal.muted)
+            Spacer(Modifier.weight(1f))
+            // search
+            OutlinedTextField(
+                value = filter, onValueChange = onFilter,
+                placeholder = { Text("filter ip / mac / vendor", fontSize = 12.5.sp, color = pal.faint) },
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(fontSize = 12.5.sp, color = pal.text),
+                shape = RoundedCornerShape(11.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedBorderColor = pal.border,
+                    focusedBorderColor = pal.brand,
+                    unfocusedContainerColor = pal.bg,
+                    focusedContainerColor = pal.card,
+                ),
+                modifier = Modifier.height(48.dp),
+            )
+        }
+        HorizontalDivider(color = pal.border)
+        // table header
+        Row(
+            Modifier.fillMaxWidth().background(pal.card2)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Text("Device", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp, color = pal.muted, modifier = Modifier.weight(1.4f))
+            Text("MAC / Vendor", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp, color = pal.muted, modifier = Modifier.weight(1.3f))
+            Text("Speed", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp, color = pal.muted, modifier = Modifier.weight(1.1f))
+            Text("Status", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp, color = pal.muted, modifier = Modifier.weight(1.2f))
+        }
+        // rows
+        if (filtered.isEmpty()) {
+            EmptyRow(pal, if (state.devices.isEmpty()) "scanning the network" else "no match \"$filter\"")
+        } else {
+            filtered.forEach { d ->
+                DeviceRow(d, pal, onBlock = { vm.setBlock(d.ip, it) }, onLimit = { vm.setLimit(d.ip, it) })
+                HorizontalDivider(color = pal.border, thickness = 0.5.dp)
             }
         }
     }
 }
 
 @Composable
-private fun WarningCard(msg: String) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+private fun EmptyRow(pal: NetCutColors, msg: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 46.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(msg, Modifier.fillMaxWidth().padding(22.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-// ---------------------------------------------------------------- device row
-
-@Composable
-private fun DeviceRow(d: Device, onBlock: (Boolean) -> Unit, onLimit: (Int) -> Unit) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (d.blocked) RedSoft2(false) else MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(9.dp).clip(CircleShape)
-                        .background(if (d.blocked) Red else if (d.online) Green else Color(0xFFA8B0BE))
-                )
-                Spacer(Modifier.width(9.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(d.ip, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text(
-                        d.mac,
-                        fontSize = 10.5.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    )
-                    Text(
-                        d.vendor,
-                        fontSize = 10.5.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("▼ ${fmtRate(d.downRate).first} ${fmtRate(d.downRate).second}",
-                        fontSize = 11.sp, color = Green, fontWeight = FontWeight.SemiBold)
-                    Text("▲ ${fmtRate(d.upRate).first} ${fmtRate(d.upRate).second}",
-                        fontSize = 11.sp, color = Brand, fontWeight = FontWeight.SemiBold)
-                    Text("${fmtBytes(d.rxBytes)} / ${fmtBytes(d.txBytes)}",
-                        fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                if (d.isGateway) Badge("GATEWAY", Brand)
-                if (d.isSelf) Badge("THIS PHONE", Color(0xFF7C5CFF))
-                if (d.mitm && !d.isSelf && !d.isGateway) Badge("MITM", Green)
-                if (d.limitKbps > 0) Badge("LIMIT ${d.limitKbps}K", Amber)
-                if (d.blocked) Badge("BLOCKED", Red)
-                if (!d.online && !d.isSelf) Badge("OFFLINE", Color(0xFFA8B0BE))
-            }
-            if (!d.isSelf && !d.isGateway) {
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedButton(
-                        onClick = { onBlock(!d.blocked) },
-                        shape = RoundedCornerShape(9.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = if (d.blocked) Green else Red
-                        ),
-                    ) {
-                        Text(if (d.blocked) "UNBLOCK" else "BLOCK", fontSize = 11.sp)
-                    }
-                    LimitMenu(current = d.limitKbps, onSelect = onLimit)
-                }
-            }
-        }
+        PulseDot(pal.brand)
+        Spacer(Modifier.width(8.dp))
+        Text(msg, fontFamily = Mono, fontSize = 12.sp, color = pal.muted)
     }
 }
 
 @Composable
-private fun Badge(text: String, color: Color) {
+private fun PulseDot(color: Color) {
+    var visible by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(600); visible = !visible }
+    }
     Box(
+        Modifier.size(7.dp).clip(CircleShape)
+            .background(if (visible) color else color.copy(alpha = 0.3f))
+    )
+}
+
+@Composable
+private fun DeviceRow(
+    d: Device, pal: NetCutColors,
+    onBlock: (Boolean) -> Unit, onLimit: (Int) -> Unit,
+) {
+    val rowBg = when {
+        d.blocked -> pal.redSoft
+        else -> pal.card
+    }
+    val dotColor = when {
+        d.blocked -> pal.red
+        !d.online -> pal.faint
+        else -> pal.green
+    }
+
+    Column(Modifier.fillMaxWidth().background(rowBg).padding(horizontal = 16.dp, vertical = 13.dp)) {
+        Row(verticalAlignment = Alignment.Top) {
+            // ── Device col ──
+            Column(Modifier.weight(1.4f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
+                    Spacer(Modifier.width(9.dp))
+                    Text(d.ip, fontFamily = Mono, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = pal.text)
+                }
+                Text(
+                    d.hostname.ifEmpty { "" },
+                    fontFamily = Mono, fontSize = 10.5.sp, color = pal.amber,
+                    modifier = Modifier.padding(start = 17.dp, top = 2.dp).heightIn(min = 15.dp),
+                )
+            }
+            // ── MAC/Vendor col ──
+            Column(Modifier.weight(1.3f)) {
+                Text(d.mac, fontFamily = Mono, fontSize = 11.sp, color = pal.muted)
+                Text(
+                    d.vendor.ifEmpty { "?" },
+                    fontSize = 11.5.sp, color = pal.faint, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp).heightIn(min = 15.dp),
+                )
+            }
+            // ── Speed col ──
+            Column(Modifier.weight(1.1f)) {
+                val (dv, du) = fmtRate(d.downRate)
+                val (uv, uu) = fmtRate(d.upRate)
+                Row {
+                    Text("$dv $du", fontFamily = Mono, fontSize = 12.sp,
+                        color = pal.acc, fontWeight = FontWeight.SemiBold)
+                    Text(" $uv $uu", fontFamily = Mono, fontSize = 12.sp,
+                        color = Color(0xFF454C58), fontWeight = FontWeight.SemiBold)
+                }
+                // download bar
+                val peak = maxOf(d.downRate, d.upRate, 1.0)
+                Bar(pal.acc, (d.downRate / peak * 100).toFloat().coerceIn(0f, 100f), pal)
+                Bar(pal.cy, (d.upRate / peak * 100).toFloat().coerceIn(0f, 100f), pal)
+            }
+            // ── Status col ──
+            Column(Modifier.weight(1.2f)) {
+                StatusTags(d, pal)
+            }
+        }
+        // ── Control row ──
+        if (!d.isSelf && !d.isGateway) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.padding(start = 17.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MiniButton(
+                    if (d.blocked) "UNBLOCK" else "BLOCK",
+                    pal, isBlocked = d.blocked,
+                    onClick = { onBlock(!d.blocked) },
+                )
+                LimitDropdown(d.limitKbps, pal, onSelect = onLimit)
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Text("—", fontFamily = Mono, fontSize = 10.sp,
+                color = Color(0xFF454C58), modifier = Modifier.padding(start = 17.dp))
+        }
+    }
+}
+
+@Composable
+private fun Bar(fillColor: Color, pct: Float, pal: NetCutColors) {
+    Box(
+        Modifier.padding(top = 6.dp).height(4.dp).width(112.dp)
+            .clip(RoundedCornerShape(99.dp)).background(pal.border),
+    ) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction = pct / 100f).clip(RoundedCornerShape(99.dp)).background(fillColor))
+    }
+}
+
+@Composable
+private fun StatusTags(d: Device, pal: NetCutColors) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (d.isSelf) Tag("THIS PHONE", pal.brandSoft, pal.brand, pal)
+        if (d.isGateway) Tag("GATEWAY", pal.brandSoft, pal.brand, pal)
+        if (d.mitm && !d.isSelf && !d.isGateway) Tag("MITM", pal.green, Color.White, pal)
+        if (d.limitKbps > 0) Tag("LIMIT ${d.limitKbps}K", pal.amberSoft, pal.amber, pal)
+        if (d.blocked) Tag("BLOCKED", pal.red, Color.White, pal)
+        if (!d.online && !d.isSelf) Tag("OFFLINE", Color.Transparent, pal.faint, pal, bordered = true)
+        if (!d.isSelf && !d.isGateway && !d.blocked && d.online && d.limitKbps == 0 && !d.mitm)
+            Tag("IDLE", Color.Transparent, pal.faint, pal, bordered = true)
+    }
+}
+
+@Composable
+private fun Tag(text: String, bg: Color, fg: Color, pal: NetCutColors, bordered: Boolean = false) {
+    Row(
         Modifier
             .clip(RoundedCornerShape(99.dp))
-            .background(color.copy(alpha = 0.14f))
-            .padding(horizontal = 9.dp, vertical = 3.dp),
+            .then(if (bordered) Modifier.border(1.dp, pal.border, RoundedCornerShape(99.dp)) else Modifier)
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 3.5.dp),
     ) {
-        Text(text, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = color, letterSpacing = 0.6.sp)
+        Text(text, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp, color = fg)
     }
 }
 
 @Composable
-private fun LimitMenu(current: Int, onSelect: (Int) -> Unit) {
+private fun MiniButton(text: String, pal: NetCutColors, isBlocked: Boolean, onClick: () -> Unit) {
+    val (bg, fg, borderC) = if (isBlocked) Triple(pal.green, Color.White, pal.green)
+        else Triple(pal.redSoft, pal.red, pal.red)
+    Button(
+        onClick = onClick,
+        shape = RoundedCornerShape(9.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = bg, contentColor = fg),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        elevation = null,
+        modifier = Modifier.border(1.dp, borderC, RoundedCornerShape(9.dp)),
+    ) {
+        Text(text, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+    }
+}
+
+@Composable
+private fun LimitDropdown(current: Int, pal: NetCutColors, onSelect: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val active = current > 0
     Box {
-        OutlinedButton(onClick = { expanded = true }, shape = RoundedCornerShape(9.dp)) {
-            Text(if (current > 0) "$current kbps" else "no limit", fontSize = 11.sp)
+        Button(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(9.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = pal.card, contentColor = if (active) pal.amber else pal.muted,
+            ),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+            elevation = null,
+            modifier = Modifier.border(1.dp, if (active) pal.amber else pal.border, RoundedCornerShape(9.dp)),
+        ) {
+            Text(
+                if (active) "${current}k" else "no limit",
+                fontFamily = Mono, fontSize = 10.5.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             listOf(0, 64, 128, 256, 512, 1024, 2048, 4096, 8192).forEach { k ->
                 DropdownMenuItem(
-                    text = { Text(if (k == 0) "no limit" else "$k kbps") },
+                    text = { Text(if (k == 0) "no limit" else "${k}k", fontSize = 12.sp) },
                     onClick = { onSelect(k); expanded = false },
                 )
             }
@@ -395,42 +625,73 @@ private fun LimitMenu(current: Int, onSelect: (Int) -> Unit) {
     }
 }
 
-// ---------------------------------------------------------------- log
-
+// ════════════════════════════════════════════════════════════ EVENT LOG
 @Composable
-private fun LogCard(logs: List<String>) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+private fun LogPanel(state: DashboardUiState, pal: NetCutColors) {
+    val now = remember { mutableStateOf("--:--:--") }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now.value = java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(java.util.Date())
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
+    Column(
+        Modifier.padding(horizontal = 14.dp, vertical = 14.dp).fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.dp, pal.border, RoundedCornerShape(16.dp))
+            .background(pal.card),
     ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text(
-                "EVENT LOG",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.2.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            if (logs.isEmpty()) {
-                Text("—", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                logs.take(20).forEachIndexed { i, l ->
-                    Text(
-                        l,
-                        fontSize = 10.5.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = if (i == 0) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Event Log", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.2.sp, color = pal.muted)
+            Spacer(Modifier.weight(1f))
+            Text(now.value, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.2.sp, color = pal.muted)
+        }
+        HorizontalDivider(color = pal.border)
+        Column(Modifier.heightIn(max = 170.dp).padding(horizontal = 22.dp, vertical = 12.dp)) {
+            state.logs.take(20).forEachIndexed { i, msg ->
+                Row(Modifier.padding(vertical = 2.5.dp)) {
+                    Text("—", fontFamily = Mono, fontSize = 11.sp, color = pal.faint,
+                        modifier = Modifier.width(52.dp))
+                    Text(msg, fontFamily = Mono, fontSize = 11.sp,
+                        color = if (i == 0) pal.brand else pal.muted,
+                        fontWeight = if (i == 0) FontWeight.SemiBold else FontWeight.Normal)
                 }
             }
         }
     }
 }
 
-// ---------------------------------------------------------------- helpers
+// ════════════════════════════════════════════════════════════ FOOTER
+@Composable
+private fun Footer(pal: NetCutColors) {
+    Row(
+        Modifier.padding(horizontal = 14.dp, vertical = 20.dp).fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // root indicator
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(pal.green))
+            Text("ROOT", fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp, color = pal.faint)
+        }
+        Text("NETCUT v1.0", fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp, color = pal.faint)
+        Spacer(Modifier.weight(1f))
+        Text(
+            "credits · @itschandra_28",
+            fontSize = 11.sp, fontWeight = FontWeight.Medium,
+            letterSpacing = 0.3.sp, color = pal.muted,
+        )
+    }
+}
 
+// ════════════════════════════════════════════════════════════ HELPERS
 private fun fmtRate(bps: Double): Pair<String, String> {
     var v = bps
     val units = listOf("B/s", "KB/s", "MB/s", "GB/s")
@@ -446,18 +707,3 @@ private fun fmtBytes(b: Long): String {
     while (v >= 1024 && i < units.size - 1) { v /= 1024; i++ }
     return String.format(Locale.US, if (v < 10) "%.2f %s" else "%.1f %s", v, units[i])
 }
-
-@Composable
-private fun Person_soft(dark: Boolean) = if (dark) Color(0x243D8BFD) else BrandSoft
-
-@Composable
-private fun Person_fg(dark: Boolean) = if (dark) BrandDarkTheme else Brand
-
-@Composable
-private fun GreenSoft2(dark: Boolean) = if (dark) Color(0x2434D399) else GreenSoft
-
-@Composable
-private fun AmberSoft2(dark: Boolean) = if (dark) Color(0x24F5B544) else AmberSoft
-
-@Composable
-private fun RedSoft2(dark: Boolean) = if (dark) Color(0x24FF6B6B) else RedSoft
