@@ -394,18 +394,32 @@ class NetcutRepository(private val context: Context) {
         }
     }
 
+    private var prevTotals = LongArray(3) // [rx, tx, timestampMs]
+
     private fun snapshot(loading: Boolean): DashboardUiState {
         val (totRx, totTx) = ifaceTotals()
+        val now = System.currentTimeMillis()
+        var downRate = 0.0
+        var upRate = 0.0
+        if (prevTotals[2] > 0) {
+            val dt = (now - prevTotals[2]) / 1000.0
+            if (dt > 0.2) {
+                downRate = ((totRx - prevTotals[0]).coerceAtLeast(0)) / dt
+                upRate = ((totTx - prevTotals[1]).coerceAtLeast(0)) / dt
+            }
+        }
+        prevTotals[0] = totRx; prevTotals[1] = totTx; prevTotals[2] = now
+
         val list = synchronized(devices) { devices.values.sortedBy { ipToInt(it.ip) } }
         return DashboardUiState(
             loading = loading,
             rootOk = rootOk,
             net = net,
             devices = list,
-            downRate = list.sumOf { it.downRate },
-            upRate = list.sumOf { it.upRate },
+            downRate = downRate,
+            upRate = upRate,
             totalDown = totRx,
-            totalUp = totRx.let { totTx },
+            totalUp = totTx,
             blockedCount = list.count { it.blocked },
             limitedCount = list.count { it.limitKbps > 0 },
             mitmOn = mitmOn,

@@ -25,7 +25,7 @@ val RedLight = Color(0xFFE5484D)
 val RedSoftLight = Color(0xFFFDECEC)
 val AmberLight = Color(0xFFF59E0B)
 val AmberSoftLight = Color(0xFFFFF4E0)
-val GridLight = Color(0x12313F51)  // rgba(31,39,51,.07)
+val GridLight = Color(0x2E313F51)  // rgba(31,39,51,.18) — lebih visible
 
 // ===== EXACT web palette (dark) =====
 val BrandDarkT = Color(0xFF3D8BFD)
@@ -46,7 +46,7 @@ val RedDark = Color(0xFFFF6B6B)
 val RedSoftDark = Color(0x21FF6B6B)
 val AmberDark = Color(0xFFFBBF24)
 val AmberSoftDark = Color(0x21FBBF24)
-val GridDark = Color(0x14E7ECF3)   // rgba(231,236,243,.08)
+val GridDark = Color(0x2EE7ECF3)   // rgba(231,236,243,.18) — lebih visible
 
 data class NetCutColors(
     val brand: Color, val brandDark: Color, val brandSoft: Color,

@@ -190,7 +190,11 @@ private fun ChartCanvas(down: List<Double>, up: List<Double>, cDown: Color, cUp:
         val max = (down + up).maxOrNull()?.coerceAtLeast(1024.0)?.times(1.15) ?: 1200.0
         val n = 90; val dx = size.width / (n - 1)
         fun py(v: Double) = size.height - 8f - (v / max * (size.height - 18f)).toFloat()
+        // grid lines
         for (i in 1 until 4) { val y = (size.height * i / 4f); drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f) }
+        // baseline (zero line)
+        drawLine(grid.copy(alpha = 0.35f), Offset(0f, size.height - 8f), Offset(size.width, size.height - 8f), 1.5f)
+        // series
         drawSeries(up, n, dx, ::py, cUp, 0.11f)
         drawSeries(down, n, dx, ::py, cDown, 0.15f)
     }
