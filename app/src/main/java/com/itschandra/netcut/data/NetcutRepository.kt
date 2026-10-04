@@ -295,7 +295,19 @@ class NetcutRepository(private val context: Context) {
     }
 
     private suspend fun restartMitmIfChanged(force: Boolean = false) {
-        if (!mitmOn || !net.ready || net.gatewayMac.isEmpty()) return
+        if (!mitmOn || net.ip.isEmpty()) return
+        // resolve gateway MAC kalau belum ada (ping gateway buat populate ARP)
+        if (net.gatewayMac.isEmpty() && net.gateway.isNotEmpty()) {
+            RootShell.run("ping -c1 -W1 ${net.gateway} >/dev/null 2>&1", 3_000)
+            val r = RootShell.run("cat /proc/net/arp", 3_000)
+            r.out.lineSequence().forEach { line ->
+                val p = line.trim().split(Regex("\\s+"))
+                if (p.size >= 4 && p[0] == net.gateway && p[3] != "00:00:00:00:00:00") {
+                    net = net.copy(gatewayMac = p[3].lowercase())
+                }
+            }
+        }
+        if (net.gatewayMac.isEmpty() || net.gateway.isEmpty()) return
         val targets = devices.entries
             .filter { it.key != net.ip && it.key != net.gateway && it.value.mac.isNotEmpty() }
             .map { it.key to it.value.mac }

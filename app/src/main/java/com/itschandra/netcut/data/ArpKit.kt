@@ -51,10 +51,12 @@ object ArpKit {
         val bin = ensure(context) ?: return false
         if (targets.isEmpty()) return true
         val list = targets.joinToString(",") { "${it.first}:${it.second}" }
+        // setsid = detach dari shell biar daemon tetep hidup setelah su exit
         val cmd = "pkill -f '$bin mitm' >/dev/null 2>&1; " +
-            "nohup $bin mitm ${net.iface} ${net.ip} ${net.mac} ${net.gateway} ${net.gatewayMac} " +
+            "sleep 0.2; " +
+            "setsid $bin mitm ${net.iface} ${net.ip} ${net.mac} ${net.gateway} ${net.gatewayMac} " +
             "'$list' >/dev/null 2>&1 &"
-        val r = RootShell.run(cmd, 8_000)
+        val r = RootShell.run(cmd, 10_000)
         return r.code == 0 || r.out.isBlank()
     }
 
