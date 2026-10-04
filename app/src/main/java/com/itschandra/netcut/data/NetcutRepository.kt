@@ -43,7 +43,7 @@ class NetcutRepository(private val context: Context) {
         try {
             val r = RootShell.runBlocking("ip -4 addr show 2>/dev/null | grep -B2 'inet ' | grep -E '^[0-9]+:' | head -3", 5_000)
             r.out.lineSequence().forEach { line ->
-                val name = line.trim().substringBefore(':').trim().removePrefix("^[0-9]+: ".toRegex())
+                val name = line.trim().substringBefore(':').trim().replace(Regex("^[0-9]+: "), "")
                 if (name.startsWith("wlan") && iface.isEmpty()) iface = name
             }
             if (iface.isNotEmpty()) {
