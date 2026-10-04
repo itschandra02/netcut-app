@@ -311,9 +311,11 @@ class NetcutRepository(private val context: Context) {
         val targets = devices.entries
             .filter { it.key != net.ip && it.key != net.gateway && it.value.mac.isNotEmpty() }
             .map { it.key to it.value.mac }
+        if (targets.isEmpty()) return
         val sig = targets.joinToString("|") { "${it.first}:${it.second}" }
         if (!force && sig == lastMitmTargets) return
         lastMitmTargets = sig
+        log("starting mitm daemon (${targets.size} targets)")
         ArpKit.startMitm(context, net, targets)
     }
 
@@ -324,6 +326,14 @@ class NetcutRepository(private val context: Context) {
         ArpKit.ensure(context)
         if (!rootOk) rootOk = RootShell.hasRoot()
         if (!rootOk) return@withContext snapshot(loading = false)
+
+        // Health check: pastikan daemon mitm selalu hidup
+        if (mitmOn && net.ip.isNotEmpty() && net.gatewayMac.isNotEmpty()) {
+            val pidCheck = RootShell.run("pidof arpkit", 2_000)
+            if (pidCheck.out.trim().isEmpty()) {
+                restartMitmIfChanged(force = true)
+            }
+        }
 
         val fresh = readNet()
         if (net.ready && fresh.ready && fresh != net) {
