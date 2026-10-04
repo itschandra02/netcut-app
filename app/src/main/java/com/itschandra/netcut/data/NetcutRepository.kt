@@ -39,20 +39,59 @@ class NetcutRepository(private val context: Context) {
         var iface = ""
         var ip = ""
         var mac = ""
+        // Method 1: su + ip (paling reliable di semua device termasuk MIUI)
         try {
-            val nifs = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-            val candidates = nifs.filter { !it.isLoopback && it.inetAddresses.hasMoreElements() }
-            val pick = candidates.firstOrNull { it.name.startsWith("wlan") }
-                ?: candidates.firstOrNull { it.hardwareAddress != null }
-                ?: candidates.firstOrNull()
-            if (pick != null) {
-                iface = pick.name
-                mac = pick.hardwareAddress?.joinToString(":") { "%02x".format(it) } ?: ""
-                pick.inetAddresses.toList().forEach { a ->
-                    if (a is Inet4Address && ip.isEmpty()) ip = a.hostAddress ?: ""
-                }
+            val r = RootShell.runBlocking("ip -4 addr show 2>/dev/null | grep -B2 'inet ' | grep -E '^[0-9]+:' | head -3", 5_000)
+            r.out.lineSequence().forEach { line ->
+                val name = line.trim().substringBefore(':').trim().removePrefix("^[0-9]+: ".toRegex())
+                if (name.startsWith("wlan") && iface.isEmpty()) iface = name
+            }
+            if (iface.isNotEmpty()) {
+                val r2 = RootShell.runBlocking(
+                    "ip -4 addr show $iface 2>/dev/null | grep 'inet ' | awk '{print \$2}' | cut -d/ -f1 | head -1",
+                    4_000
+                )
+                ip = r2.out.trim().lines().firstOrNull { it.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) } ?: ""
+                val r3 = RootShell.runBlocking("cat /sys/class/net/$iface/address 2>/dev/null", 3_000)
+                mac = r3.out.trim().lines().firstOrNull { it.contains(':') } ?: ""
             }
         } catch (_: Exception) {}
+
+        // Method 2: Java NetworkInterface (fallback)
+        if (iface.isEmpty() || ip.isEmpty() || mac.isEmpty()) {
+            try {
+                val nifs = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                val candidates = nifs.filter { !it.isLoopback && it.inetAddresses.hasMoreElements() }
+                val pick = candidates.firstOrNull { it.name.startsWith("wlan") }
+                    ?: candidates.firstOrNull { it.hardwareAddress != null }
+                    ?: candidates.firstOrNull()
+                if (pick != null) {
+                    if (iface.isEmpty()) iface = pick.name
+                    if (mac.isEmpty()) mac = pick.hardwareAddress?.joinToString(":") { "%02x".format(it) } ?: ""
+                    if (ip.isEmpty()) {
+                        pick.inetAddresses.toList().forEach { a ->
+                            if (a is Inet4Address && ip.isEmpty()) ip = a.hostAddress ?: ""
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Method 3: getprop (last resort utk interface name)
+        if (iface.isEmpty()) {
+            try {
+                val r = RootShell.runBlocking("getprop wifi.interface", 3_000)
+                iface = r.out.trim().lines().firstOrNull { it.isNotEmpty() } ?: "wlan0"
+                if (ip.isEmpty()) {
+                    val r2 = RootShell.runBlocking("ip -4 addr show $iface | grep 'inet ' | awk '{print \$2}' | cut -d/ -f1", 4_000)
+                    ip = r2.out.trim().lines().firstOrNull { it.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) } ?: ""
+                }
+                if (mac.isEmpty()) {
+                    val r3 = RootShell.runBlocking("cat /sys/class/net/$iface/address", 3_000)
+                    mac = r3.out.trim().lines().firstOrNull { it.contains(':') } ?: ""
+                }
+            } catch (_: Exception) {}
+        }
 
         var gateway = ""
         if (iface.isNotEmpty()) {
@@ -155,15 +194,18 @@ class NetcutRepository(private val context: Context) {
 
     // ---------------------------------------------------------------- actions
     suspend fun scanNow() = withContext(Dispatchers.IO) {
-        if (!net.ready) return@withContext
-        log("scan started")
+        if (net.ip.isEmpty() && net.iface.isEmpty()) return@withContext
+        log("scan started (${net.iface} ${net.ip})")
         val found = ArpKit.scan(context, net)
         if (found.isEmpty()) {
             // fallback: sweep ping + /proc/net/arp
-            RootShell.run(
-                (1..254).joinToString(" ") { "ping -c1 -W1 ${net.prefix}.$it" } + " >/dev/null 2>&1",
-                20_000
-            )
+            val prefix = net.prefix.ifEmpty { net.ip.substringBeforeLast('.', "") }
+            if (prefix.isNotEmpty()) {
+                RootShell.run(
+                    (1..254).joinToString(" ") { "ping -c1 -W1 $prefix.$it" } + " >/dev/null 2>&1",
+                    20_000
+                )
+            }
             val r = RootShell.run("cat /proc/net/arp", 3_000)
             r.out.lineSequence().drop(1).forEach { line ->
                 val p = line.trim().split(Regex("\\s+"))
@@ -266,6 +308,8 @@ class NetcutRepository(private val context: Context) {
     // ---------------------------------------------------------------- tick
     /** Dipanggil tiap detik dari ViewModel. */
     suspend fun tick(): DashboardUiState = withContext(Dispatchers.IO) {
+        // Pastikan binary native selalu ter-extract (walau scan belum jalan)
+        ArpKit.ensure(context)
         if (!rootOk) rootOk = RootShell.hasRoot()
         if (!rootOk) return@withContext snapshot(loading = false)
 
@@ -275,6 +319,10 @@ class NetcutRepository(private val context: Context) {
         } else if (!net.ready && fresh.ready) {
             net = fresh
             ensureForwarding()
+            scanNow()
+        } else if (!net.ready && fresh.ip.isNotEmpty()) {
+            // Network info parsial — tetap coba scan dengan data yang ada
+            net = fresh
             scanNow()
         } else {
             net = fresh
