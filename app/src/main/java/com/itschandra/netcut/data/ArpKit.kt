@@ -51,17 +51,24 @@ object ArpKit {
         val bin = ensure(context) ?: return false
         if (targets.isEmpty()) return true
         val list = targets.joinToString(",") { "${it.first}:${it.second}" }
-        // setsid = detach dari shell biar daemon tetep hidup setelah su exit
-        val cmd = "pkill -f '$bin mitm' >/dev/null 2>&1; " +
-            "sleep 0.2; " +
+        // kill by pidfile (bukan pkill -f — itu bunuh shell sendiri!)
+        val pidFile = "${context.filesDir}/arpkit.pid"
+        val cmd = "if [ -f $pidFile ]; then kill \$(cat $pidFile) 2>/dev/null; rm -f $pidFile; fi; " +
+            "kill \$(pidof $(bin.substringAfterLast('/'))) 2>/dev/null; " +
+            "sleep 0.3; " +
             "setsid $bin mitm ${net.iface} ${net.ip} ${net.mac} ${net.gateway} ${net.gatewayMac} " +
-            "'$list' >/dev/null 2>&1 &"
+            "'$list' >/dev/null 2>&1 & echo \$! > $pidFile"
         val r = RootShell.run(cmd, 10_000)
         return r.code == 0 || r.out.isBlank()
     }
 
     suspend fun stopMitm(context: Context) {
         val bin = binPath ?: return
-        RootShell.run("pkill -f '$bin mitm' >/dev/null 2>&1", 5_000)
+        val pidFile = "${context.filesDir}/arpkit.pid"
+        RootShell.run(
+            "if [ -f $pidFile ]; then kill \$(cat $pidFile) 2>/dev/null; rm -f $pidFile; fi; " +
+            "kill \$(pidof $(bin.substringAfterLast('/'))) 2>/dev/null",
+            5_000
+        )
     }
 }
