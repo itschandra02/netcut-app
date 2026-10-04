@@ -51,24 +51,25 @@ object ArpKit {
         val bin = ensure(context) ?: return false
         if (targets.isEmpty()) return true
         val list = targets.joinToString(",") { "${it.first}:${it.second}" }
-        // kill by pidfile (bukan pkill -f — itu bunuh shell sendiri!)
         val pidFile = "${context.filesDir}/arpkit.pid"
-        val cmd = "if [ -f $pidFile ]; then kill \$(cat $pidFile) 2>/dev/null; rm -f $pidFile; fi; " +
-            "kill \$(pidof $(bin.substringAfterLast('/'))) 2>/dev/null; " +
-            "sleep 0.3; " +
-            "setsid $bin mitm ${net.iface} ${net.ip} ${net.mac} ${net.gateway} ${net.gatewayMac} " +
-            "'$list' >/dev/null 2>&1 & echo \$! > $pidFile"
-        val r = RootShell.run(cmd, 10_000)
-        return r.code == 0 || r.out.isBlank()
+        // kill existing daemon first
+        RootShell.run("kill \$(cat $pidFile 2>/dev/null) 2>/dev/null; rm -f $pidFile", 3_000)
+        RootShell.run("kill \$(pidof arpkit) 2>/dev/null", 3_000)
+        kotlinx.coroutines.delay(300)
+        // start daemon detached (gak di-wait)
+        val cmd = "$bin mitm ${net.iface} ${net.ip} ${net.mac} ${net.gateway} ${net.gatewayMac} '$list'"
+        val pid = RootShell.startDetached(cmd)
+        if (pid > 0) {
+            // save pid
+            RootShell.run("echo $pid > $pidFile", 2_000)
+            return true
+        }
+        return false
     }
 
     suspend fun stopMitm(context: Context) {
-        val bin = binPath ?: return
         val pidFile = "${context.filesDir}/arpkit.pid"
-        RootShell.run(
-            "if [ -f $pidFile ]; then kill \$(cat $pidFile) 2>/dev/null; rm -f $pidFile; fi; " +
-            "kill \$(pidof $(bin.substringAfterLast('/'))) 2>/dev/null",
-            5_000
-        )
+        RootShell.run("kill \$(cat $pidFile 2>/dev/null) 2>/dev/null; rm -f $pidFile", 3_000)
+        RootShell.run("kill \$(pidof arpkit) 2>/dev/null", 3_000)
     }
 }

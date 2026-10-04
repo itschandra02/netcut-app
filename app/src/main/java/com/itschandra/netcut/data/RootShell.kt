@@ -3,6 +3,7 @@ package com.itschandra.netcut.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /** Wrapper eksekusi perintah root (`su -c`). Aman gagal — gak pernah nge-throw. */
@@ -47,4 +48,19 @@ object RootShell {
     fun runBlocking(cmd: String, timeoutMs: Long = 8_000): ShellResult = exec(cmd, timeoutMs)
 
     fun hasRoot(): Boolean = runBlocking("id", 5_000).out.contains("uid=0")
+
+    /** Start proses background yang gak di-wait (daemon). Return PID atau -1. */
+    fun startDetached(cmd: String): Int {
+        return try {
+            val pb = ProcessBuilder("su", "-c", "$cmd >/dev/null 2>&1")
+            pb.redirectErrorStream(false)
+            pb.redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
+            pb.redirectError(ProcessBuilder.Redirect.to(File("/dev/null")))
+            val proc = pb.start()
+            // jangan wait — biarkan jalan sebagai daemon
+            proc.pid().toInt()
+        } catch (e: Exception) {
+            -1
+        }
+    }
 }
